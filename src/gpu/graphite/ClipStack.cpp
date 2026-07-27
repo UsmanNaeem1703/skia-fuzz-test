@@ -20,12 +20,12 @@
 #include "include/core/SkStrokeRec.h"
 #include "include/gpu/graphite/Recorder.h"
 #include "include/private/SkDebug.h"
+#include "include/private/SkEnumBitMask.h"
 #include "include/private/SkFloatingPoint.h"
-#include "src/base/SkEnumBitMask.h"
-#include "src/base/SkVx.h"
 #include "src/core/SkPathPriv.h"
 #include "src/core/SkRRectPriv.h"
 #include "src/core/SkRectPriv.h"
+#include "src/core/SkVx.h"
 #include "src/gpu/graphite/AtlasProvider.h"
 #include "src/gpu/graphite/ClipAtlasManager.h"
 #include "src/gpu/graphite/Device.h"
@@ -543,7 +543,8 @@ ClipStack::RawElement::RawElement(const Rect& deviceBounds,
         , fOrder(DrawOrder::kNoIntersection)
         , fMaxZ(DrawOrder::kClearDepth)
         , fInvalidatedByIndex(-1)
-        , fCaptureParams(nullptr) {
+        , fCaptureParams(nullptr)
+        , fInsertion(nullptr) {
     // Discard shapes that don't have any area (including when a transform can't be inverted, since
     // it means the two dimensions are collapsed to 0 or 1 dimension in device space).
     if (fShape.isLine() || !localToDevice.valid()) {
@@ -682,7 +683,7 @@ void ClipStack::RawElement::drawClip(Device* device) {
     fOrder = DrawOrder::kNoIntersection;
     fMaxZ = DrawOrder::kClearDepth;
     fCaptureParams = nullptr;
-    fInsertion = {nullptr, nullptr};
+    fInsertion = nullptr;
 }
 
 void ClipStack::RawElement::drawClipImmediate(Device* device, const Rect& snappedOuterBounds) {
@@ -814,7 +815,7 @@ ClipStack::DrawInfluence ClipStack::RawElement::testForDraw(const TransformedSha
     return SimplifyForDraw(*this, draw);
 }
 
-std::pair<CompressedPaintersOrder, Insertion> ClipStack::RawElement::updateForDraw(
+std::pair<CompressedPaintersOrder, Layer*> ClipStack::RawElement::updateForDraw(
         Device* device,
         const BoundsManager* boundsManager,
         const Rect& deviceBounds,
@@ -1972,13 +1973,13 @@ Clip ClipStack::visitClipStackForDraw(const Transform& localToDevice,
     return draw.toClip(geometry, nonMSAAClip, cs.shader());
 }
 
-std::pair<CompressedPaintersOrder, Insertion> ClipStack::updateClipStateForDraw(
+std::pair<CompressedPaintersOrder, Layer*> ClipStack::updateClipStateForDraw(
         const Clip& clip,
         const ElementList& effectiveElements,
         const BoundsManager* boundsManager,
         PaintersDepth z) {
     if (clip.isClippedOut()) {
-        return {DrawOrder::kNoIntersection, {}};
+        return {DrawOrder::kNoIntersection, nullptr};
     }
 
     SkDEBUGCODE(const SaveRecord& cs = this->currentSaveRecord();)
@@ -1990,7 +1991,7 @@ std::pair<CompressedPaintersOrder, Insertion> ClipStack::updateClipStateForDraw(
     // render steps. Although effectiveElements may contain a mixture of drawn and undrawn elements,
     // taking the max across the indexes (which are monotonically increasing) associated with each
     // fDeferredLayer yields the latest layer.
-    Insertion latestInsertion;
+    Layer* latestInsertion = nullptr;
     Rect deviceBounds = this->deviceBounds();
     SkASSERT(!clip.drawBounds().isEmptyNegativeOrNaN());
 
@@ -2020,7 +2021,7 @@ std::pair<CompressedPaintersOrder, Insertion> ClipStack::updateClipStateForDraw(
         // identical insertion. Even if this reverse ordering property was not true, a clipped
         // shading draw cannot match on a depth draw, so it would either match on an existing draw
         // or is added to to the tail, preserving the ordering).
-        if (insertion > latestInsertion) {
+        if (!latestInsertion || insertion->fOrder > latestInsertion->fOrder) {
             latestInsertion = insertion;
         }
     }

@@ -35,7 +35,7 @@ class SkRuntimeEffect;
 namespace skgpu::graphite {
 
 class DrawContext;
-class FloatStorageManager;
+class StorageBufferManager;
 class PipelineDataGatherer;
 class UniquePaintParamsID;
 
@@ -309,6 +309,7 @@ struct ColorSpaceTransformBlock {
         }
         SkColorSpaceXformSteps fSteps;
         Swizzle                fReadSwizzle = Swizzle::RGBA();
+        bool                   fIsAlphaOnly = false;
     };
 
     static void AddBlock(const KeyContext&, const ColorSpaceTransformData&);

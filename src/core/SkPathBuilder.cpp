@@ -18,13 +18,13 @@
 #include "include/private/SkSafe32.h"
 #include "include/private/SkTArray.h"
 #include "include/private/SkTo.h"
-#include "src/base/SkVx.h"
 #include "src/core/SkGeometry.h"
 #include "src/core/SkMatrixPriv.h"
 #include "src/core/SkPathData.h"
 #include "src/core/SkPathEnums.h"
 #include "src/core/SkPathPriv.h"
 #include "src/core/SkPathRawShapes.h"
+#include "src/core/SkVx.h"
 
 #include <algorithm>
 #include <cmath>
@@ -202,6 +202,9 @@ SkPathBuilder& SkPathBuilder::quadTo(SkPoint pt1, SkPoint pt2) {
 SkPathBuilder& SkPathBuilder::conicTo(SkPoint pt1, SkPoint pt2, SkScalar w) {
     this->ensureMove();
 
+    if (w <= 0) {
+        return this->lineTo(pt2);
+    }
     SkPoint* p = fPts.push_back_n(2);
     p[0] = pt1;
     p[1] = pt2;
@@ -405,7 +408,7 @@ static int build_arc_conics(const SkRect& oval, const SkVector& start, const SkV
                             SkPoint* singlePt) {
     SkMatrix    matrix;
 
-    matrix.setScale(SkScalarHalf(oval.width()), SkScalarHalf(oval.height()));
+    matrix.setScale(oval.width() / 2.f, oval.height() / 2.f);
     matrix.postTranslate(oval.centerX(), oval.centerY());
 
     int count = SkConic::BuildUnitArc(start, stop, dir, &matrix, conics);

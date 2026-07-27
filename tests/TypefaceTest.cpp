@@ -22,11 +22,11 @@
 #include "include/private/SkFixed.h"
 #include "include/private/SkTemplates.h"
 #include "include/utils/SkCustomTypeface.h"
-#include "src/base/SkEndian.h"
-#include "src/base/SkUTF.h"
+#include "src/core/SkEndian.h"
 #include "src/core/SkFontDescriptor.h"
 #include "src/core/SkFontPriv.h"
 #include "src/core/SkTypefaceCache.h"
+#include "src/core/SkUTF.h"
 #include "src/sfnt/SkOTTable_OS_2.h"
 #include "src/sfnt/SkOTTable_OS_2_V0.h"
 #include "src/sfnt/SkSFNTHeader.h"
@@ -318,7 +318,7 @@ DEF_TEST(FontDescriptorNegativeVariationSerialize, reporter) {
     SkDynamicMemoryWStream stream;
     desc.serialize(&stream);
     SkFontDescriptor descD;
-    SkFontDescriptor::Deserialize(stream.detachAsStream().get(), &descD);
+    SkFontDescriptor::Deserialize(stream.detachAsStream().get(), &descD, /*sanitizer=*/nullptr);
 
     REPORTER_ASSERT(reporter, descD.getStyle() == style);
     REPORTER_ASSERT(reporter, 0 == strcmp(desc.getPostscriptName(), postscriptName));

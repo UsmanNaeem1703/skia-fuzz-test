@@ -9,6 +9,7 @@ package gen_tasks_logic
 */
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -21,10 +22,15 @@ import (
 	"strings"
 	"time"
 
+	"go.skia.org/infra/go/auth"
 	"go.skia.org/infra/go/cas/rbe"
 	"go.skia.org/infra/go/cipd"
+	"go.skia.org/infra/go/httputils"
+	swarmingv2 "go.skia.org/infra/go/swarming/v2"
+	"go.skia.org/infra/task_scheduler/go/orphaned_tasks_machines"
 	"go.skia.org/infra/task_scheduler/go/specs"
 	"go.skia.org/skia/bazel/device_specific_configs"
+	"golang.org/x/oauth2/google"
 )
 
 const (
@@ -356,10 +362,7 @@ func In(s string, a []string) bool {
 	return false
 }
 
-// GenTasks regenerates the tasks.json file. Loads the job list from a jobs.json
-// file which is the sibling of the calling gen_tasks.go file. If cfg is nil, it
-// is similarly loaded from a cfg.json file which is the sibling of the calling
-// gen_tasks.go file.
+// FormatJobsJSON formats the jobs.json file for readability and consistency.
 func FormatJobsJSON(jobsFilePath string) []*JobInfo {
 	var jobsWithInfo []*JobInfo
 	LoadJSON(jobsFilePath, &jobsWithInfo)
@@ -391,6 +394,10 @@ func FormatJobsJSON(jobsFilePath string) []*JobInfo {
 	return jobsWithInfo
 }
 
+// GenTasks regenerates the tasks.json file. Loads the job list from a jobs.json
+// file which is the sibling of the calling gen_tasks.go file. If cfg is nil, it
+// is similarly loaded from a cfg.json file which is the sibling of the calling
+// gen_tasks.go file.
 func GenTasks(cfg *Config) {
 	b := specs.MustNewTasksCfgBuilder()
 
@@ -626,6 +633,9 @@ func GenTasks(cfg *Config) {
 	generateCompileCAS(b, cfg)
 
 	builder.MustFinish()
+
+	// Check that all tasks actually have machine(s) which can run them.
+	warnForOrphanedTasks(builder)
 }
 
 // getThisDirName returns the infra/bots directory which is an ancestor of this
@@ -757,7 +767,7 @@ func (b *jobBuilder) deriveCompileTaskName() string {
 				"SkottieTracing", "SkottieWASM", "GpuTess", "DMSAAStats", "Docker", "PDF",
 				"Puppeteer", "SkottieFrames", "RenderSKP", "CanvasPerf", "AllPathsVolatile",
 				"WebGL2", "i5", "OldestSupportedSkpVersion", "FakeWGPU", "Protected",
-				"AndroidNDKFonts", "Upload", "TestPrecompile"}
+				"AndroidNDKFonts", "Upload", "TestPrecompile", "AvoidDepth"}
 			keep := make([]string, 0, len(ec))
 			for _, part := range ec {
 				if !In(part, ignore) {
@@ -838,16 +848,14 @@ func (b *TaskBuilder) swarmDimensions() {
 var androidDeviceInfos = map[string][]string{
 	"AndroidOne":      {"sprout", "MOB30Q"},
 	"GalaxyS7_G930FD": {"herolte", "R16NW"}, // This is Oreo.
-	"GalaxyS9":        {"exynos9810", "QP1A.190711.020"},
 	"GalaxyS20":       {"exynos990", "QP1A.190711.020"},
 	"GalaxyS24":       {"pineapple", "UP1A.231005.007"},
 	"GalaxyS25Plus":   {"sun", "BP2A.250605.031.A3"},
 	"JioNext":         {"msm8937", "RKQ1.210602.002"},
 	"Mokey":           {"mokey", "UP1A.231105.001"},
 	"MokeyGo32":       {"mokey_go32", "UQ1A.240105.003.A1"},
-	"MotoG73":         {"devonf", "U1TN34.82-12-17"},
+	"MotoG73":         {"devonf", "U1TNS34.82-12-17-3"},
 	"Nexus5":          {"hammerhead", "M4B30Z_3437181"},
-	"Nexus7":          {"grouper", "LMY47V"}, // 2012 Nexus 7
 	"P30":             {"HWELE", "HUAWEIELE-L29"},
 	"Pixel3a":         {"sargo", "QP1A.190711.020"},
 	"Pixel4":          {"flame", "RPB2.200611.009"}, // R Preview
@@ -858,7 +866,6 @@ var androidDeviceInfos = map[string][]string{
 	"Pixel7":          {"panther", "AP4A.241205.013"},
 	"Pixel7Pro":       {"cheetah", "TD1A.221105.002"},
 	"Pixel9":          {"tokay", "AP4A.241205.013"},
-	"Pixel10":         {"frankel", "BP41.250916.012.A1"},
 	"TecnoSpark3Pro":  {"TECNO-KB8", "PPR1.180610.011"},
 	"Wembley":         {"wembley", "SP2A.220505.008"},
 }
@@ -881,7 +888,7 @@ func (b *TaskBuilder) defaultSwarmDimensions() {
 			"Mac11":       "Mac-11",
 			"Mac12":       "Mac-12",
 			"Mac13":       "Mac-13",
-			"Mac14":       "Mac-14.7",
+			"Mac14":       "Mac-14.8",
 			"Mac15":       "Mac-15.7",
 			"Mokey":       "Android",
 			"MokeyGo32":   "Android",
@@ -905,7 +912,7 @@ func (b *TaskBuilder) defaultSwarmDimensions() {
 			d["os"] = DEFAULT_OS_WIN_GCE
 			d["gce"] = "1"
 		}
-		if os == "Win11" && b.GPU("IntelUHDGraphics770") {
+		if os == "Win11" && b.GPU("IntelUHDGraphics770", "IntelArc140V") {
 			d["os"] = "Windows-11-26200"
 		}
 		if strings.Contains(os, "iOS") {
@@ -1041,6 +1048,8 @@ func (b *TaskBuilder) defaultSwarmDimensions() {
 			if b.MatchOs("Win") {
 				gpu, ok := map[string]string{
 					"GTX1660":             "10de:2184-31.0.15.4601",
+					"IntelArc140V":        "8086:64a0-32.0.101.7029",
+					"IntelArcB570":        "8086:e20c-32.0.101.8132",
 					"IntelHD4400":         "8086:0a16-10.0.26100.1",
 					"IntelIris540":        "8086:1926-31.0.101.2115",
 					"IntelIris655":        "8086:3ea5-26.20.100.7463",
@@ -1055,11 +1064,6 @@ func (b *TaskBuilder) defaultSwarmDimensions() {
 				}[b.Parts["cpu_or_gpu_value"]]
 				if !ok {
 					log.Fatalf("Entry %q not found in Win GPU mapping.", b.Parts["cpu_or_gpu_value"])
-				}
-				// TODO(borenet): Remove this block once these machines are all
-				// migrated.
-				if b.Os("Win10") && b.Parts["cpu_or_gpu_value"] == "RTX3060" {
-					gpu = "10de:2489-32.0.15.6094"
 				}
 				d["gpu"] = gpu
 			} else if b.IsLinux() {
@@ -1119,7 +1123,7 @@ func (b *TaskBuilder) defaultSwarmDimensions() {
 				"MacBookPro11.5": {"mac_model": "MacBookPro11,5", "os": "Mac-12.7"},
 				"MacBookPro15.1": {"mac_model": "MacBookPro15,1", "os": "Mac-15.3"},
 				"MacBookPro15.3": {"mac_model": "Mac15,3", "os": "Mac-13.5"},
-				"MacMini8.1":     {"mac_model": "Macmini8,1"}, // on both 14.5 and 14.7
+				"MacMini8.1":     {"mac_model": "Macmini8,1"}, // on both 14.5 and 14.8
 				"MacMini9.1":     {"mac_model": "Macmini9,1", "os": "Mac-14.7"},
 				"MacMini16.10":   {"mac_model": "Mac16,10", "os": "Mac-15.7"},
 			}[b.Parts["model"]]; ok {
@@ -2202,6 +2206,7 @@ func (b *jobBuilder) bazelBuild() {
 			// We only run builds in GCE.
 			"linux_x64":   bazelCacheDirOnGCELinux,
 			"mac_arm64":   bazelCacheDirOnMac,
+			"mac_x64":     bazelCacheDirOnMac,
 			"windows_x64": bazelCacheDirOnWindows,
 		}[host]
 		if !ok {
@@ -2216,7 +2221,7 @@ func (b *jobBuilder) bazelBuild() {
 
 		cmd := []string{
 			"luci-auth", "context",
-			b.taskDriver("bazel_build", host != "windows_x64"),
+			b.taskDriver("bazel_build", false),
 			"--project_id=skia-swarming-bots",
 			"--task_id=" + specs.PLACEHOLDER_TASK_ID,
 			"--task_name=" + b.Name,
@@ -2246,6 +2251,14 @@ func (b *jobBuilder) bazelBuild() {
 		} else if host == "mac_arm64" {
 			b.usesBazel("mac_arm64")
 			b.dimension("cpu:arm64-64-Apple_M4", "pool:Skia")
+			b.usesXCode()
+		} else if host == "mac_x64" {
+			b.usesBazel("mac_x64")
+			b.dimension(
+				"cpu:x86-64-i9-8950HK",
+				"cipd_platform:mac-amd64",
+				"pool:Skia",
+			)
 			b.usesXCode()
 		} else {
 			panic("unsupported Bazel host " + host)
@@ -2394,4 +2407,37 @@ func setPkgPaths(path string, pkgs ...*cipd.Package) []*cipd.Package {
 		pkg.Path = path
 	}
 	return pkgs
+}
+
+func warnForOrphanedTasks(b *builder) {
+	const swarmingServer = "chromium-swarm.appspot.com" // TODO(borent): Don't hard-code.
+
+	ctx := context.Background()
+	ts, err := google.DefaultTokenSource(ctx, auth.ScopeUserinfoEmail)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "WARNING: Failed to check that all tasks have associated machines: %s\n", err)
+		return
+	}
+	c := httputils.DefaultClientConfig().WithTokenSource(ts).Client()
+	swarm := swarmingv2.NewDefaultClient(c, swarmingServer)
+	report, err := orphaned_tasks_machines.GenerateReport(context.Background(), b.Config(), swarm)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "WARNING: Failed to check that all tasks have associated machines: %s\n", err)
+		return
+	}
+	if len(report.NoMatchingMachines) > 0 {
+		fmt.Fprintf(os.Stderr, "WARNING: The following tasks have no machines which can run them:\n")
+		for idx, group := range report.NoMatchingMachines {
+			fmt.Fprintf(os.Stderr, "%d:\n", idx)
+			fmt.Fprintf(os.Stderr, "  Dimensions:\n")
+			for _, dim := range group.Dimensions {
+				fmt.Fprintf(os.Stderr, "    - %s\n", dim)
+			}
+			fmt.Fprintf(os.Stderr, "  Tasks:\n")
+			for _, task := range group.Tasks {
+				fmt.Fprintf(os.Stderr, "    - %s\n", task)
+			}
+			fmt.Fprintf(os.Stderr, "\n")
+		}
+	}
 }

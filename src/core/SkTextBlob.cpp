@@ -19,10 +19,10 @@
 #include "include/private/SkFloatingPoint.h"
 #include "include/private/SkMalloc.h"
 #include "include/private/SkTo.h"
-#include "src/base/SkSafeMath.h"
 #include "src/core/SkFontPriv.h"
 #include "src/core/SkGlyph.h"
 #include "src/core/SkReadBuffer.h"
+#include "src/core/SkSafeMath.h"
 #include "src/core/SkStrikeSpec.h"
 #include "src/core/SkTextBlobPriv.h"
 #include "src/core/SkWriteBuffer.h"
@@ -777,6 +777,12 @@ sk_sp<SkTextBlob> SkTextBlobPriv::MakeFromBuffer(SkReadBuffer& reader) {
             if (!reader.readByteArray(buf->clusters, clusterSize) ||
                 !reader.readByteArray(buf->utf8text, textSize)) {
                 return nullptr;
+            }
+
+            for (int i = 0; i < glyphCount; ++i) {
+                if (buf->clusters[i] >= static_cast<uint32_t>(textSize)) {
+                    return nullptr;
+                }
             }
         }
     }

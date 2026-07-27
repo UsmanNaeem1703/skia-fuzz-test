@@ -78,6 +78,7 @@ skia_enable_fontmgr_fontconfig = true \n\
 skia_use_perfetto = false \n\
 skia_use_libgrapheme = false \n\
 skia_use_icu4x = false \n\
+skia_use_partition_alloc = false \n\
 skia_use_system_freetype2 = false  \n\
 link_pool_depth=2  \n\
 extra_cflags = [  \n\
@@ -103,5 +104,5 @@ RUN find . -name .git -print0 | xargs -0 rm -rf
 # Copy the resulting Skia repo and build outputs into the fiddler-base image.
 # We wait as late as possible to avoid expensive rebuilds while experimenting
 # with changes to fiddler-base.
-FROM gcr.io/skia-public/fiddler-base@sha256:51e85c2ffa70535fc417c442036d2f76794a4fd1b40b15ba67b62b249ac52c09
+FROM gcr.io/skia-public/fiddler-base@sha256:5787c0b0b82865021dacb14c45efed98c1ee203681c94dd668757e2ad29e1136
 COPY --from=skia-build --chown=skia:skia /tmp/skia /tmp/skia
